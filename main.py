@@ -1,478 +1,650 @@
+# file_manager.py
+
+import os
+import shutil
 import tkinter as tk
-from tkinter import ttk, messagebox, colorchooser
-import math
+from tkinter import ttk, filedialog, messagebox, simpledialog
+from datetime import datetime
+import stat
 
 
-class Room:
-    """Класс, представляющий комнату"""
-
-    def __init__(self, x, y, width, height, name="Комната"):
-        self.x = x
-        self.y = y
-        self.width = width
-        self.height = height
-        self.name = name
-        self.color = "#E8F0F8"  # Светло-голубой по умолчанию
-        self.selected = False
-
-    def area(self):
-        """Вычисление площади комнаты"""
-        return self.width * self.height
-
-    def contains_point(self, px, py):
-        """Проверка, содержит ли комната точку с заданными координатами"""
-        return (self.x <= px <= self.x + self.width and
-                self.y <= py <= self.y + self.height)
-
-
-class ArchitecturalPlanner:
+class FileManager:
     def __init__(self, root):
         self.root = root
-        self.root.title("Архитектурный планировщик - Лабораторная работа №5")
-        self.root.geometry("1200x700")
+        self.root.title("FileMaster Pro - Файловый менеджер")
+        self.root.geometry("1200x600")
 
-        # Переменные для проекта
-        self.rooms = []
-        self.selected_room = None
-        self.drag_data = {"x": 0, "y": 0, "item": None, "dragging": False}
-        self.resizing = False
-        self.resize_handle = None
-        self.grid_size = 20  # Размер сетки для привязки
+        # Текущие пути для левой и правой панелей
+        self.left_path = os.path.expanduser("~")
+        self.right_path = os.path.expanduser("~")
 
-        # Настройка стилей
-        self.setup_styles()
+        self.setup_ui()
+        self.load_left_panel()
+        self.load_right_panel()
 
-        # Создание интерфейса
-        self.create_widgets()
+        # Привязка горячих клавиш
+        self.setup_hotkeys()
 
-        # Привязка событий
-        self.setup_bindings()
+    def setup_ui(self):
+        """Создание пользовательского интерфейса"""
 
-        # Обновление статуса
-        self.update_status()
+        # Главное меню
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
 
-    def setup_styles(self):
-        """Настройка стилей для виджетов"""
-        style = ttk.Style()
-        style.theme_use('clam')
+        # Меню "Файл"
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Файл", menu=file_menu)
+        file_menu.add_command(label="Создать файл", command=lambda: self.create_file(self.get_current_panel()))
+        file_menu.add_command(label="Создать папку", command=lambda: self.create_directory(self.get_current_panel()))
+        file_menu.add_separator()
+        file_menu.add_command(label="Выход", command=self.root.quit)
 
-        # Настройка цветов
-        style.configure('Title.TLabel', font=('Arial', 16, 'bold'))
-        style.configure('Heading.TLabel', font=('Arial', 12, 'bold'))
-        style.configure('Status.TLabel', font=('Arial', 10))
+        # Меню "Правка"
+        edit_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Правка", menu=edit_menu)
+        edit_menu.add_command(label="Копировать", command=lambda: self.copy_item(self.get_current_panel()))
+        edit_menu.add_command(label="Переместить", command=lambda: self.move_item(self.get_current_panel()))
+        edit_menu.add_command(label="Переименовать", command=lambda: self.rename_item(self.get_current_panel()))
+        edit_menu.add_command(label="Удалить", command=lambda: self.delete_item(self.get_current_panel()))
 
-    def create_widgets(self):
-        """Создание элементов интерфейса"""
-        # Основной фрейм
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        # Меню "Вид"
+        view_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Вид", menu=view_menu)
+        view_menu.add_command(label="Обновить", command=self.refresh_panels)
 
-        # Левая панель с элементами управления
-        left_panel = ttk.Frame(main_frame, width=250, relief=tk.SUNKEN, borderwidth=2)
-        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
-        left_panel.pack_propagate(False)
+        # Меню "Справка"
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Справка", menu=help_menu)
+        help_menu.add_command(label="О программе", command=self.show_about)
 
-        # Заголовок левой панели
-        ttk.Label(left_panel, text="Управление проектом", style='Title.TLabel').pack(pady=10)
+        # Основной фрейм для панелей
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Фрейм для создания нового проекта
-        create_frame = ttk.LabelFrame(left_panel, text="Создать проект", padding="10")
-        create_frame.pack(fill=tk.X, padx=10, pady=5)
+        # Левая панель
+        left_frame = ttk.LabelFrame(main_frame, text="Левая панель")
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
 
-        ttk.Label(create_frame, text="Ширина (м):").pack(anchor=tk.W)
-        self.project_width = ttk.Entry(create_frame, width=15)
-        self.project_width.insert(0, "800")
-        self.project_width.pack(fill=tk.X, pady=2)
+        self.left_path_label = ttk.Label(left_frame, text=self.left_path, relief=tk.SUNKEN)
+        self.left_path_label.pack(fill=tk.X, padx=2, pady=2)
 
-        ttk.Label(create_frame, text="Высота (м):").pack(anchor=tk.W)
-        self.project_height = ttk.Entry(create_frame, width=15)
-        self.project_height.insert(0, "600")
-        self.project_height.pack(fill=tk.X, pady=2)
+        self.left_listbox = tk.Listbox(left_frame, height=25)
+        self.left_listbox.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
 
-        ttk.Button(create_frame, text="Создать новый проект",
-                   command=self.create_new_project).pack(fill=tk.X, pady=5)
+        left_scrollbar = ttk.Scrollbar(left_frame, orient=tk.VERTICAL, command=self.left_listbox.yview)
+        left_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.left_listbox.config(yscrollcommand=left_scrollbar.set)
 
-        # Фрейм для добавления комнат
-        add_frame = ttk.LabelFrame(left_panel, text="Добавить комнату", padding="10")
-        add_frame.pack(fill=tk.X, padx=10, pady=5)
+        # Контекстное меню для левой панели
+        self.left_listbox.bind("<Button-3>", lambda e: self.show_context_menu(e, "left"))
+        self.left_listbox.bind("<Double-Button-1>", lambda e: self.open_item("left"))
 
-        ttk.Label(add_frame, text="Название:").pack(anchor=tk.W)
-        self.room_name = ttk.Entry(add_frame, width=15)
-        self.room_name.insert(0, "Гостиная")
-        self.room_name.pack(fill=tk.X, pady=2)
+        # Правая панель
+        right_frame = ttk.LabelFrame(main_frame, text="Правая панель")
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=2)
 
-        ttk.Label(add_frame, text="Ширина (м):").pack(anchor=tk.W)
-        self.room_width = ttk.Entry(add_frame, width=15)
-        self.room_width.insert(0, "200")
-        self.room_width.pack(fill=tk.X, pady=2)
+        self.right_path_label = ttk.Label(right_frame, text=self.right_path, relief=tk.SUNKEN)
+        self.right_path_label.pack(fill=tk.X, padx=2, pady=2)
 
-        ttk.Label(add_frame, text="Высота (м):").pack(anchor=tk.W)
-        self.room_height = ttk.Entry(add_frame, width=15)
-        self.room_height.insert(0, "150")
-        self.room_height.pack(fill=tk.X, pady=2)
+        self.right_listbox = tk.Listbox(right_frame, height=25)
+        self.right_listbox.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
 
-        ttk.Button(add_frame, text="Добавить комнату",
-                   command=self.add_room).pack(fill=tk.X, pady=5)
+        right_scrollbar = ttk.Scrollbar(right_frame, orient=tk.VERTICAL, command=self.right_listbox.yview)
+        right_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.right_listbox.config(yscrollcommand=right_scrollbar.set)
 
-        # Фрейм для свойств выбранной комнаты
-        self.properties_frame = ttk.LabelFrame(left_panel, text="Свойства комнаты", padding="10")
-        self.properties_frame.pack(fill=tk.X, padx=10, pady=5)
+        # Контекстное меню для правой панели
+        self.right_listbox.bind("<Button-3>", lambda e: self.show_context_menu(e, "right"))
+        self.right_listbox.bind("<Double-Button-1>", lambda e: self.open_item("right"))
 
-        ttk.Label(self.properties_frame, text="Название:").pack(anchor=tk.W)
-        self.edit_name = ttk.Entry(self.properties_frame, width=15)
-        self.edit_name.pack(fill=tk.X, pady=2)
-        self.edit_name.bind('<KeyRelease>', self.update_room_name)
+        # Панель инструментов
+        toolbar = ttk.Frame(self.root)
+        toolbar.pack(fill=tk.X, padx=5, pady=2)
 
-        ttk.Label(self.properties_frame, text="Цвет:").pack(anchor=tk.W)
-        color_frame = ttk.Frame(self.properties_frame)
-        color_frame.pack(fill=tk.X, pady=2)
-        self.color_preview = tk.Canvas(color_frame, width=30, height=20, bg='#E8F0F8', highlightthickness=1)
-        self.color_preview.pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(color_frame, text="Выбрать цвет", command=self.choose_color).pack(side=tk.LEFT)
+        ttk.Button(toolbar, text="Копировать", command=lambda: self.copy_item(self.get_current_panel())).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Переместить", command=lambda: self.move_item(self.get_current_panel())).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Удалить", command=lambda: self.delete_item(self.get_current_panel())).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Переименовать", command=lambda: self.rename_item(self.get_current_panel())).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Создать папку", command=lambda: self.create_directory(self.get_current_panel())).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Создать файл", command=lambda: self.create_file(self.get_current_panel())).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Поиск", command=self.search_item).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Свойства", command=lambda: self.show_properties(self.get_current_panel())).pack(
+            side=tk.LEFT, padx=2)
 
-        ttk.Button(self.properties_frame, text="Удалить комнату",
-                   command=self.delete_selected_room).pack(fill=tk.X, pady=5)
+        # Статусная строка
+        self.status_bar = ttk.Label(self.root, text="Готов к работе", relief=tk.SUNKEN, anchor=tk.W)
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # Фрейм для информации
-        info_frame = ttk.LabelFrame(left_panel, text="Информация", padding="10")
-        info_frame.pack(fill=tk.X, padx=10, pady=5)
+    def setup_hotkeys(self):
+        """Настройка горячих клавиш"""
+        self.root.bind("<F5>", lambda e: self.copy_item(self.get_current_panel()))
+        self.root.bind("<F6>", lambda e: self.move_item(self.get_current_panel()))
+        self.root.bind("<F8>", lambda e: self.delete_item(self.get_current_panel()))
+        self.root.bind("<F2>", lambda e: self.rename_item(self.get_current_panel()))
+        self.root.bind("<F7>", lambda e: self.create_directory(self.get_current_panel()))
+        self.root.bind("<Control-f>", lambda e: self.search_item())
 
-        self.info_text = tk.Text(info_frame, height=8, width=25, state=tk.DISABLED)
-        self.info_text.pack(fill=tk.X)
+    def load_left_panel(self):
+        """Загрузка содержимого левой панели"""
+        self.load_panel(self.left_listbox, self.left_path, self.left_path_label)
 
-        # Центральная область - холст для рисования
-        canvas_frame = ttk.Frame(main_frame)
-        canvas_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    def load_right_panel(self):
+        """Загрузка содержимого правой панели"""
+        self.load_panel(self.right_listbox, self.right_path, self.right_path_label)
 
-        # Заголовок холста
-        ttk.Label(canvas_frame, text="План помещения", style='Title.TLabel').pack(pady=5)
+    def load_panel(self, listbox, path, path_label):
+        """Загрузка содержимого панели"""
+        listbox.delete(0, tk.END)
 
-        # Холст с прокруткой
-        self.canvas = tk.Canvas(canvas_frame, bg='white', width=800, height=600,
-                                highlightbackground='#CCCCCC', highlightthickness=2)
-        self.canvas.pack(fill=tk.BOTH, expand=True)
-
-        # Нижняя панель статуса
-        status_frame = ttk.Frame(self.root, relief=tk.SUNKEN, borderwidth=1)
-        status_frame.pack(side=tk.BOTTOM, fill=tk.X)
-
-        self.status_label = ttk.Label(status_frame, text="Готов к работе", style='Status.TLabel')
-        self.status_label.pack(side=tk.LEFT, padx=10, pady=2)
-
-        self.coord_label = ttk.Label(status_frame, text="", style='Status.TLabel')
-        self.coord_label.pack(side=tk.RIGHT, padx=10, pady=2)
-
-        # Отключаем свойства комнаты пока ничего не выбрано
-        self.set_properties_state(tk.DISABLED)
-
-    def setup_bindings(self):
-        """Настройка привязок событий"""
-        self.canvas.bind("<Button-1>", self.on_canvas_click)
-        self.canvas.bind("<B1-Motion>", self.on_canvas_drag)
-        self.canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
-        self.canvas.bind("<Motion>", self.on_mouse_move)
-        self.canvas.bind("<Configure>", self.redraw_canvas)
-
-        # Привязка клавиш
-        self.root.bind('<Delete>', lambda e: self.delete_selected_room())
-        self.root.bind('<Escape>', lambda e: self.deselect_all())
-
-    def create_new_project(self):
-        """Создание нового проекта"""
         try:
-            width = float(self.project_width.get())
-            height = float(self.project_height.get())
+            # Добавляем родительский каталог
+            if path != os.path.dirname(path):
+                listbox.insert(tk.END, "..")
 
-            if width <= 0 or height <= 0:
-                messagebox.showerror("Ошибка", "Размеры должны быть положительными числами")
-                return
+            # Получаем список файлов и папок
+            items = os.listdir(path)
 
-            self.rooms.clear()
-            self.selected_room = None
-            self.deselect_all()
-            self.redraw_canvas()
-            self.update_status()
+            # Сортируем: сначала папки, потом файлы
+            dirs = []
+            files = []
 
-        except ValueError:
-            messagebox.showerror("Ошибка", "Введите корректные числовые значения")
+            for item in items:
+                full_path = os.path.join(path, item)
+                if os.path.isdir(full_path):
+                    dirs.append(f"[Папка] " + item)
+                else:
+                    size = os.path.getsize(full_path)
+                    files.append(f"[Файл] {item} ({self.format_size(size)})")
 
-    def add_room(self):
-        """Добавление новой комнаты"""
-        try:
-            name = self.room_name.get().strip()
-            if not name:
-                name = "Комната"
+            # Добавляем в список
+            for dir in sorted(dirs):
+                listbox.insert(tk.END, dir)
+            for file in sorted(files):
+                listbox.insert(tk.END, file)
 
-            width = float(self.room_width.get())
-            height = float(self.room_height.get())
+            path_label.config(text=path)
+            self.update_status(f"Загружено: {len(dirs)} папок, {len(files)} файлов")
 
-            if width <= 0 or height <= 0:
-                messagebox.showerror("Ошибка", "Размеры комнаты должны быть положительными числами")
-                return
+        except PermissionError:
+            messagebox.showerror("Ошибка", "Нет прав доступа к каталогу")
+        except Exception as e:
+            messagebox.showerror("Ошибка", str(e))
 
-            # Размещаем комнату в случайном месте в пределах видимой области
-            x = 50 + len(self.rooms) * 30
-            y = 50 + len(self.rooms) * 30
-
-            room = Room(x, y, width, height, name)
-            self.rooms.append(room)
-            self.redraw_canvas()
-            self.update_status()
-
-        except ValueError:
-            messagebox.showerror("Ошибка", "Введите корректные числовые значения")
-
-    def redraw_canvas(self, event=None):
-        """Перерисовка холста"""
-        self.canvas.delete("all")
-
-        # Рисуем сетку
-        self.draw_grid()
-
-        # Рисуем все комнаты
-        for room in self.rooms:
-            self.draw_room(room)
-
-        # Обновляем информацию
-        self.update_info()
-
-    def draw_grid(self):
-        """Рисование сетки"""
-        width = self.canvas.winfo_width()
-        height = self.canvas.winfo_height()
-
-        # Рисуем линии сетки
-        for x in range(0, width, self.grid_size):
-            self.canvas.create_line(x, 0, x, height, fill='#F0F0F0', tags="grid")
-
-        for y in range(0, height, self.grid_size):
-            self.canvas.create_line(0, y, width, y, fill='#F0F0F0', tags="grid")
-
-    def draw_room(self, room):
-        """Рисование отдельной комнаты"""
-        # Основной прямоугольник комнаты
-        fill_color = room.color if not room.selected else self.lighten_color(room.color, 0.9)
-        outline_color = 'red' if room.selected else 'black'
-        outline_width = 3 if room.selected else 1
-
-        rect = self.canvas.create_rectangle(
-            room.x, room.y, room.x + room.width, room.y + room.height,
-            fill=fill_color, outline=outline_color, width=outline_width,
-            tags=("room", f"room_{self.rooms.index(room)}")
-        )
-
-        # Название комнаты
-        self.canvas.create_text(
-            room.x + room.width / 2, room.y + room.height / 2 - 15,
-            text=room.name, font=('Arial', 10, 'bold'), tags="room_text"
-        )
-
-        # Площадь
-        self.canvas.create_text(
-            room.x + room.width / 2, room.y + room.height / 2,
-            text=f"Площадь: {room.area():.1f} м²", font=('Arial', 9), tags="room_text"
-        )
-
-        # Размеры
-        self.canvas.create_text(
-            room.x + room.width / 2, room.y + room.height / 2 + 15,
-            text=f"{room.width}×{room.height}", font=('Arial', 9), tags="room_text"
-        )
-
-        # Маркеры для изменения размера (если комната выбрана)
-        if room.selected:
-            self.draw_resize_handles(room)
-
-    def draw_resize_handles(self, room):
-        """Рисование маркеров для изменения размера"""
-        handle_size = 8
-        handles = [
-            (room.x + room.width - handle_size / 2, room.y + room.height - handle_size / 2),  # нижний правый
-            (room.x + room.width - handle_size / 2, room.y - handle_size / 2),  # верхний правый
-            (room.x - handle_size / 2, room.y + room.height - handle_size / 2),  # нижний левый
-            (room.x - handle_size / 2, room.y - handle_size / 2),  # верхний левый
-        ]
-
-        for x, y in handles:
-            self.canvas.create_rectangle(
-                x, y, x + handle_size, y + handle_size,
-                fill='white', outline='blue', width=2,
-                tags=("resize_handle",)
-            )
-
-    def on_canvas_click(self, event):
-        """Обработка клика на холсте"""
-        x, y = event.x, event.y
-
-        # Проверяем, не кликнули ли на маркер изменения размера
-        items = self.canvas.find_overlapping(x - 5, y - 5, x + 5, y + 5)
-        for item in items:
-            tags = self.canvas.gettags(item)
-            if "resize_handle" in tags and self.selected_room:
-                self.resizing = True
-                self.drag_data = {"x": x, "y": y, "room": self.selected_room}
-                return
-
-        # Проверяем, кликнули ли на комнату
-        clicked_room = None
-        for room in reversed(self.rooms):
-            if room.contains_point(x, y):
-                clicked_room = room
-                break
-
-        if clicked_room:
-            # Выбираем комнату
-            self.select_room(clicked_room)
-            self.drag_data = {"x": x, "y": y, "room": clicked_room, "dragging": True}
+    def get_current_panel(self):
+        """Определение текущей активной панели"""
+        if self.root.focus_get() == self.left_listbox:
+            return "left"
         else:
-            # Снимаем выделение
-            self.deselect_all()
+            return "right"
 
-    def on_canvas_drag(self, event):
-        """Обработка перетаскивания"""
-        if self.resizing and self.selected_room:
-            # Изменение размера
-            dx = event.x - self.drag_data["x"]
-            dy = event.y - self.drag_data["y"]
+    def open_item(self, panel):
+        """Открытие элемента (папки или файла)"""
+        if panel == "left":
+            listbox = self.left_listbox
+            current_path = self.left_path
+        else:
+            listbox = self.right_listbox
+            current_path = self.right_path
 
-            # Привязка к сетке
-            new_width = max(50, self.selected_room.width + dx)
-            new_height = max(50, self.selected_room.height + dy)
+        selection = listbox.curselection()
+        if not selection:
+            return
 
-            # Округляем до ближайшего размера сетки
-            new_width = round(new_width / self.grid_size) * self.grid_size
-            new_height = round(new_height / self.grid_size) * self.grid_size
+        item_text = listbox.get(selection[0])
 
-            self.selected_room.width = new_width
-            self.selected_room.height = new_height
+        # Обработка перехода вверх
+        if item_text == "..":
+            new_path = os.path.dirname(current_path)
+        else:
+            # Извлекаем имя элемента
+            if item_text.startswith("[Папка] "):
+                item_name = item_text[8:]
+            else:
+                item_name = item_text.split(" [")[0][8:] if item_text.startswith("[Файл] ") else item_text
 
-            self.drag_data["x"] = event.x
-            self.drag_data["y"] = event.y
-            self.redraw_canvas()
+            new_path = os.path.join(current_path, item_name)
 
-        elif self.drag_data.get("dragging") and self.selected_room:
-            # Перемещение комнаты
-            dx = event.x - self.drag_data["x"]
-            dy = event.y - self.drag_data["y"]
+        # Если это папка - переходим
+        if os.path.isdir(new_path):
+            if panel == "left":
+                self.left_path = new_path
+                self.load_left_panel()
+            else:
+                self.right_path = new_path
+                self.load_right_panel()
+        # Если это файл - открываем для просмотра/редактирования
+        else:
+            self.edit_file(new_path)
 
-            # Привязка к сетке
-            new_x = self.selected_room.x + dx
-            new_y = self.selected_room.y + dy
+    def edit_file(self, filepath):
+        """Редактирование текстового файла"""
+        try:
+            # Создаем окно редактирования
+            edit_window = tk.Toplevel(self.root)
+            edit_window.title(f"Редактирование: {os.path.basename(filepath)}")
+            edit_window.geometry("600x400")
 
-            # Округляем до ближайшего узла сетки
-            new_x = round(new_x / self.grid_size) * self.grid_size
-            new_y = round(new_y / self.grid_size) * self.grid_size
+            # Текстовое поле
+            text_area = tk.Text(edit_window, wrap=tk.WORD)
+            text_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-            self.selected_room.x = new_x
-            self.selected_room.y = new_y
+            # Загружаем содержимое файла
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    text_area.insert('1.0', content)
+            except UnicodeDecodeError:
+                with open(filepath, 'r', encoding='cp1251') as f:
+                    content = f.read()
+                    text_area.insert('1.0', content)
 
-            self.drag_data["x"] = event.x
-            self.drag_data["y"] = event.y
-            self.redraw_canvas()
+            # Кнопки
+            button_frame = ttk.Frame(edit_window)
+            button_frame.pack(fill=tk.X, padx=5, pady=5)
 
-    def on_canvas_release(self, event):
-        """Обработка отпускания кнопки мыши"""
-        self.drag_data = {"x": 0, "y": 0, "item": None, "dragging": False}
-        self.resizing = False
+            def save_file():
+                try:
+                    content = text_area.get('1.0', tk.END)
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    messagebox.showinfo("Успех", "Файл сохранен")
+                    edit_window.destroy()
+                except Exception as e:
+                    messagebox.showerror("Ошибка", str(e))
 
-    def on_mouse_move(self, event):
-        """Отображение координат мыши"""
-        self.coord_label.config(text=f"X: {event.x}, Y: {event.y}")
+            ttk.Button(button_frame, text="Сохранить", command=save_file).pack(side=tk.LEFT, padx=2)
+            ttk.Button(button_frame, text="Отмена", command=edit_window.destroy).pack(side=tk.LEFT, padx=2)
 
-    def select_room(self, room):
-        """Выбор комнаты"""
-        self.deselect_all()
-        room.selected = True
-        self.selected_room = room
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось открыть файл: {str(e)}")
 
-        # Обновляем поля свойств
-        self.edit_name.delete(0, tk.END)
-        self.edit_name.insert(0, room.name)
-        self.color_preview.config(bg=room.color)
+    def create_file(self, panel):
+        """Создание нового файла"""
+        if panel == "left":
+            current_path = self.left_path
+        else:
+            current_path = self.right_path
 
-        self.set_properties_state(tk.NORMAL)
-        self.redraw_canvas()
+        filename = simpledialog.askstring("Создание файла", "Введите имя файла:")
+        if filename:
+            filepath = os.path.join(current_path, filename)
+            try:
+                with open(filepath, 'w') as f:
+                    f.write("")
+                self.refresh_panels()
+                self.update_status(f"Файл {filename} создан")
+            except Exception as e:
+                messagebox.showerror("Ошибка", str(e))
 
-    def deselect_all(self):
-        """Снятие выделения со всех комнат"""
-        for room in self.rooms:
-            room.selected = False
-        self.selected_room = None
-        self.set_properties_state(tk.DISABLED)
-        self.redraw_canvas()
+    def create_directory(self, panel):
+        """Создание новой папки"""
+        if panel == "left":
+            current_path = self.left_path
+        else:
+            current_path = self.right_path
 
-    def set_properties_state(self, state):
-        """Установка состояния полей свойств"""
-        self.edit_name.config(state=state)
-        self.color_preview.config(state=state)
+        dirname = simpledialog.askstring("Создание папки", "Введите имя папки:")
+        if dirname:
+            dirpath = os.path.join(current_path, dirname)
+            try:
+                os.mkdir(dirpath)
+                self.refresh_panels()
+                self.update_status(f"Папка {dirname} создана")
+            except Exception as e:
+                messagebox.showerror("Ошибка", str(e))
 
-    def update_room_name(self, event=None):
-        """Обновление названия комнаты"""
-        if self.selected_room:
-            self.selected_room.name = self.edit_name.get()
-            self.redraw_canvas()
+    def copy_item(self, panel):
+        """Копирование элемента"""
+        if panel == "left":
+            source_listbox = self.left_listbox
+            source_path = self.left_path
+            dest_path = self.right_path
+        else:
+            source_listbox = self.right_listbox
+            source_path = self.right_path
+            dest_path = self.left_path
 
-    def choose_color(self):
-        """Выбор цвета для комнаты"""
-        if self.selected_room:
-            color = colorchooser.askcolor(title="Выберите цвет комнаты",
-                                          initialcolor=self.selected_room.color)
-            if color[1]:  # color[1] содержит шестнадцатеричное значение
-                self.selected_room.color = color[1]
-                self.color_preview.config(bg=color[1])
-                self.redraw_canvas()
+        selection = source_listbox.curselection()
+        if not selection:
+            return
 
-    def delete_selected_room(self):
-        """Удаление выбранной комнаты"""
-        if self.selected_room and messagebox.askyesno("Подтверждение",
-                                                      "Удалить выбранную комнату?"):
-            self.rooms.remove(self.selected_room)
-            self.deselect_all()
-            self.redraw_canvas()
-            self.update_status()
+        item_text = source_listbox.get(selection[0])
 
-    def lighten_color(self, color, factor):
-        """Осветление цвета"""
-        # Конвертируем hex в RGB
-        color = color.lstrip('#')
-        rgb = tuple(int(color[i:i + 2], 16) for i in (0, 2, 4))
+        # Извлекаем имя элемента
+        if item_text == "..":
+            return
 
-        # Осветляем
-        lightened = tuple(min(255, int(c * factor)) for c in rgb)
+        if item_text.startswith("[Папка] "):
+            item_name = item_text[8:]
+        else:
+            item_name = item_text.split(" [")[0][8:] if item_text.startswith("[Файл] ") else item_text
 
-        # Конвертируем обратно в hex
-        return '#{:02x}{:02x}{:02x}'.format(*lightened)
+        source_item = os.path.join(source_path, item_name)
+        dest_item = os.path.join(dest_path, item_name)
 
-    def update_info(self):
-        """Обновление информационного текста"""
-        self.info_text.config(state=tk.NORMAL)
-        self.info_text.delete(1.0, tk.END)
+        try:
+            if os.path.isdir(source_item):
+                shutil.copytree(source_item, dest_item)
+                self.update_status(f"Папка {item_name} скопирована")
+            else:
+                shutil.copy2(source_item, dest_item)
+                self.update_status(f"Файл {item_name} скопирован")
 
-        total_area = sum(room.area() for room in self.rooms)
+            self.refresh_panels()
+        except Exception as e:
+            messagebox.showerror("Ошибка", str(e))
 
-        info = f"Всего комнат: {len(self.rooms)}\n"
-        info += f"Общая площадь: {total_area:.1f} м²\n\n"
-        info += "Комнаты:\n"
+    def move_item(self, panel):
+        """Перемещение элемента"""
+        if panel == "left":
+            source_listbox = self.left_listbox
+            source_path = self.left_path
+            dest_path = self.right_path
+        else:
+            source_listbox = self.right_listbox
+            source_path = self.right_path
+            dest_path = self.left_path
 
-        for i, room in enumerate(self.rooms, 1):
-            info += f"{i}. {room.name}\n"
-            info += f"   {room.width}×{room.height}\n"
-            info += f"   {room.area():.1f} м²\n\n"
+        selection = source_listbox.curselection()
+        if not selection:
+            return
 
-        self.info_text.insert(1.0, info)
-        self.info_text.config(state=tk.DISABLED)
+        item_text = source_listbox.get(selection[0])
 
-    def update_status(self):
+        if item_text == "..":
+            return
+
+        if item_text.startswith("[Папка] "):
+            item_name = item_text[8:]
+        else:
+            item_name = item_text.split(" [")[0][8:] if item_text.startswith("[Файл] ") else item_text
+
+        source_item = os.path.join(source_path, item_name)
+        dest_item = os.path.join(dest_path, item_name)
+
+        try:
+            shutil.move(source_item, dest_item)
+            self.update_status(f"Элемент {item_name} перемещен")
+            self.refresh_panels()
+        except Exception as e:
+            messagebox.showerror("Ошибка", str(e))
+
+    def rename_item(self, panel):
+        """Переименование элемента"""
+        if panel == "left":
+            listbox = self.left_listbox
+            current_path = self.left_path
+        else:
+            listbox = self.right_listbox
+            current_path = self.right_path
+
+        selection = listbox.curselection()
+        if not selection:
+            return
+
+        item_text = listbox.get(selection[0])
+
+        if item_text == "..":
+            return
+
+        if item_text.startswith("[Папка] "):
+            item_name = item_text[8:]
+            item_type = "папку"
+        else:
+            item_name = item_text.split(" [")[0][8:] if item_text.startswith("[Файл] ") else item_text
+            item_type = "файл"
+
+        new_name = simpledialog.askstring("Переименование", f"Введите новое имя для {item_type}:",
+                                          initialvalue=item_name)
+
+        if new_name and new_name != item_name:
+            old_path = os.path.join(current_path, item_name)
+            new_path = os.path.join(current_path, new_name)
+
+            try:
+                os.rename(old_path, new_path)
+                self.update_status(f"Элемент переименован в {new_name}")
+                self.refresh_panels()
+            except Exception as e:
+                messagebox.showerror("Ошибка", str(e))
+
+    def delete_item(self, panel):
+        """Удаление элемента"""
+        if panel == "left":
+            listbox = self.left_listbox
+            current_path = self.left_path
+        else:
+            listbox = self.right_listbox
+            current_path = self.right_path
+
+        selection = listbox.curselection()
+        if not selection:
+            return
+
+        item_text = listbox.get(selection[0])
+
+        if item_text == "..":
+            return
+
+        if item_text.startswith("[Папка] "):
+            item_name = item_text[8:]
+            item_type = "папку"
+        else:
+            item_name = item_text.split(" [")[0][8:] if item_text.startswith("[Файл] ") else item_text
+            item_type = "файл"
+
+        if messagebox.askyesno("Подтверждение", f"Вы уверены, что хотите удалить {item_type} '{item_name}'?"):
+            item_path = os.path.join(current_path, item_name)
+
+            try:
+                if os.path.isdir(item_path):
+                    shutil.rmtree(item_path)
+                else:
+                    os.remove(item_path)
+
+                self.update_status(f"Элемент {item_name} удален")
+                self.refresh_panels()
+            except Exception as e:
+                messagebox.showerror("Ошибка", str(e))
+
+    def search_item(self):
+        """Поиск файлов и папок"""
+        search_term = simpledialog.askstring("Поиск", "Введите имя для поиска:")
+        if not search_term:
+            return
+
+        panel = self.get_current_panel()
+        if panel == "left":
+            search_path = self.left_path
+        else:
+            search_path = self.right_path
+
+        results = []
+
+        for root, dirs, files in os.walk(search_path):
+            for dir in dirs:
+                if search_term.lower() in dir.lower():
+                    results.append(os.path.join(root, dir))
+
+            for file in files:
+                if search_term.lower() in file.lower():
+                    results.append(os.path.join(root, file))
+
+        # Показываем результаты
+        if results:
+            result_window = tk.Toplevel(self.root)
+            result_window.title("Результаты поиска")
+            result_window.geometry("500x300")
+
+            result_listbox = tk.Listbox(result_window)
+            result_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+            for result in results[:100]:  # Ограничиваем 100 результатами
+                result_listbox.insert(tk.END, result)
+
+            def open_selected():
+                selection = result_listbox.curselection()
+                if selection:
+                    path = result_listbox.get(selection[0])
+                    if os.path.isdir(path):
+                        if panel == "left":
+                            self.left_path = path
+                            self.load_left_panel()
+                        else:
+                            self.right_path = path
+                            self.load_right_panel()
+                    else:
+                        self.edit_file(path)
+                    result_window.destroy()
+
+            ttk.Button(result_window, text="Открыть", command=open_selected).pack(pady=5)
+
+            self.update_status(f"Найдено {len(results)} элементов")
+        else:
+            messagebox.showinfo("Поиск", "Ничего не найдено")
+
+    def show_properties(self, panel):
+        """Просмотр свойств элемента"""
+        if panel == "left":
+            listbox = self.left_listbox
+            current_path = self.left_path
+        else:
+            listbox = self.right_listbox
+            current_path = self.right_path
+
+        selection = listbox.curselection()
+        if not selection:
+            # Показываем свойства текущего каталога
+            item_path = current_path
+            item_name = os.path.basename(current_path) or current_path
+        else:
+            item_text = listbox.get(selection[0])
+
+            if item_text == "..":
+                item_path = os.path.dirname(current_path)
+                item_name = ".."
+            else:
+                if item_text.startswith("[Папка] "):
+                    item_name = item_text[8:]
+                else:
+                    item_name = item_text.split(" [")[0][8:] if item_text.startswith("[Файл] ") else item_text
+
+                item_path = os.path.join(current_path, item_name)
+
+        try:
+            stats = os.stat(item_path)
+
+            # Формируем информацию о свойствах
+            properties = f"Имя: {item_name}\n"
+            properties += f"Полный путь: {item_path}\n"
+            properties += f"Тип: {'Папка' if os.path.isdir(item_path) else 'Файл'}\n"
+            properties += f"Размер: {self.format_size(stats.st_size)}\n"
+            properties += f"Дата создания: {datetime.fromtimestamp(stats.st_ctime)}\n"
+            properties += f"Дата изменения: {datetime.fromtimestamp(stats.st_mtime)}\n"
+            properties += f"Дата доступа: {datetime.fromtimestamp(stats.st_atime)}\n"
+
+            # Атрибуты (для Windows)
+            if os.name == 'nt':
+                attrs = []
+                if stats.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
+                    attrs.append("Только чтение")
+                if stats.st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN:
+                    attrs.append("Скрытый")
+                if stats.st_file_attributes & stat.FILE_ATTRIBUTE_SYSTEM:
+                    attrs.append("Системный")
+
+                properties += f"Атрибуты: {', '.join(attrs) if attrs else 'Нет'}\n"
+
+            # Права доступа (для Unix)
+            if os.name != 'nt':
+                mode = stats.st_mode
+                permissions = ""
+                permissions += "r" if mode & stat.S_IRUSR else "-"
+                permissions += "w" if mode & stat.S_IWUSR else "-"
+                permissions += "x" if mode & stat.S_IXUSR else "-"
+                permissions += "r" if mode & stat.S_IRGRP else "-"
+                permissions += "w" if mode & stat.S_IWGRP else "-"
+                permissions += "x" if mode & stat.S_IXGRP else "-"
+                permissions += "r" if mode & stat.S_IROTH else "-"
+                permissions += "w" if mode & stat.S_IWOTH else "-"
+                permissions += "x" if mode & stat.S_IXOTH else "-"
+
+                properties += f"Права доступа: {permissions}\n"
+
+            messagebox.showinfo("Свойства", properties)
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", str(e))
+
+    def format_size(self, size):
+        """Форматирование размера файла"""
+        for unit in ['Б', 'КБ', 'МБ', 'ГБ']:
+            if size < 1024.0:
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
+        return f"{size:.1f} ТБ"
+
+    def show_context_menu(self, event, panel):
+        """Показ контекстного меню"""
+        context_menu = tk.Menu(self.root, tearoff=0)
+        context_menu.add_command(label="Открыть", command=lambda: self.open_item(panel))
+        context_menu.add_separator()
+        context_menu.add_command(label="Копировать", command=lambda: self.copy_item(panel))
+        context_menu.add_command(label="Переместить", command=lambda: self.move_item(panel))
+        context_menu.add_command(label="Переименовать", command=lambda: self.rename_item(panel))
+        context_menu.add_command(label="Удалить", command=lambda: self.delete_item(panel))
+        context_menu.add_separator()
+        context_menu.add_command(label="Свойства", command=lambda: self.show_properties(panel))
+
+        try:
+            context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            context_menu.grab_release()
+
+    def refresh_panels(self):
+        """Обновление обеих панелей"""
+        self.load_left_panel()
+        self.load_right_panel()
+
+    def update_status(self, message):
         """Обновление статусной строки"""
-        total_area = sum(room.area() for room in self.rooms)
-        self.status_label.config(
-            text=f"Комнат: {len(self.rooms)} | Общая площадь: {total_area:.1f} м²"
-        )
+        self.status_bar.config(text=message)
+
+    def show_about(self):
+        """Информация о программе"""
+        about_text = """FileMaster Pro v1.0
+
+Файловый менеджер с двухпанельным интерфейсом
+
+Разработано в соответствии с ТЗ
+Функции:
+- Управление файлами и папками
+- Просмотр и редактирование
+- Копирование, перемещение, удаление
+- Поиск и свойства
+- Изменение атрибутов
+
+Горячие клавиши:
+F5 - Копировать
+F6 - Переместить
+F7 - Создать папку
+F8 - Удалить
+F2 - Переименовать
+Ctrl+F - Поиск"""
+
+        messagebox.showinfo("О программе", about_text)
 
 
 def main():
     root = tk.Tk()
-    app = ArchitecturalPlanner(root)
+    app = FileManager(root)
     root.mainloop()
 
 
