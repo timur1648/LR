@@ -1,650 +1,890 @@
-# file_manager.py
-
-import os
-import shutil
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, messagebox, filedialog
+import csv
+import json
+import xml.etree.ElementTree as ET
+import pandas as pd
 from datetime import datetime
-import stat
+import os
 
 
-class FileManager:
+class Database:
+    """Класс для представления базы данных"""
+
+    def __init__(self, name):
+        self.name = name
+        self.data = []  # Список записей
+        self.fields = []  # Названия полей
+        self.created_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def add_record(self, record):
+        """Добавление записи"""
+        self.data.append(record)
+
+    def delete_record(self, index):
+        """Удаление записи по индексу"""
+        if 0 <= index < len(self.data):
+            return self.data.pop(index)
+        return None
+
+    def update_record(self, index, new_record):
+        """Обновление записи"""
+        if 0 <= index < len(self.data):
+            self.data[index] = new_record
+            return True
+        return False
+
+    def sort_data(self, field_index, reverse=False):
+        """Сортировка данных по полю"""
+        if self.data and 0 <= field_index < len(self.fields):
+            self.data.sort(key=lambda x: x[field_index], reverse=reverse)
+
+    def search_data(self, field_index, search_term):
+        """Поиск данных по полю"""
+        if not search_term:
+            return self.data.copy()
+
+        results = []
+        for record in self.data:
+            if 0 <= field_index < len(record):
+                if str(search_term).lower() in str(record[field_index]).lower():
+                    results.append(record)
+        return results
+
+
+class DatabaseManager:
+    """Класс для управления несколькими базами данных"""
+
+    def __init__(self):
+        self.databases = {}
+        self.current_db = None
+
+    def create_database(self, name, fields):
+        """Создание новой базы данных"""
+        if name not in self.databases:
+            db = Database(name)
+            db.fields = fields
+            self.databases[name] = db
+            self.current_db = name
+            return True
+        return False
+
+    def delete_database(self, name):
+        """Удаление базы данных"""
+        if name in self.databases:
+            del self.databases[name]
+            if self.current_db == name:
+                self.current_db = None
+            return True
+        return False
+
+    def get_current_db(self):
+        """Получение текущей базы данных"""
+        if self.current_db and self.current_db in self.databases:
+            return self.databases[self.current_db]
+        return None
+
+
+class DatabaseGUI:
+    """Графический интерфейс программы"""
+
     def __init__(self, root):
         self.root = root
-        self.root.title("FileMaster Pro - Файловый менеджер")
-        self.root.geometry("1200x600")
+        self.root.title("Система управления базами данных")
+        self.root.geometry("1200x700")
 
-        # Текущие пути для левой и правой панелей
-        self.left_path = os.path.expanduser("~")
-        self.right_path = os.path.expanduser("~")
+        self.manager = DatabaseManager()
 
-        self.setup_ui()
-        self.load_left_panel()
-        self.load_right_panel()
+        # Установка стиля
+        style = ttk.Style()
+        style.theme_use('clam')
 
-        # Привязка горячих клавиш
-        self.setup_hotkeys()
+        # Создание меню
+        self.create_menu()
 
-    def setup_ui(self):
-        """Создание пользовательского интерфейса"""
+        # Создание основной панели
+        self.create_main_panel()
 
-        # Главное меню
+        # Статус бар
+        self.status_bar = ttk.Label(root, text="Готов к работе", relief=tk.SUNKEN)
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+    def create_menu(self):
+        """Создание главного меню"""
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
 
         # Меню "Файл"
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Файл", menu=file_menu)
-        file_menu.add_command(label="Создать файл", command=lambda: self.create_file(self.get_current_panel()))
-        file_menu.add_command(label="Создать папку", command=lambda: self.create_directory(self.get_current_panel()))
+        file_menu.add_command(label="Создать БД", command=self.create_database_dialog)
+        file_menu.add_command(label="Открыть БД", command=self.open_database)
+        file_menu.add_command(label="Сохранить", command=self.save_database)
+        file_menu.add_separator()
+        file_menu.add_command(label="Импорт", command=self.import_data)
+        file_menu.add_command(label="Экспорт", command=self.export_data)
         file_menu.add_separator()
         file_menu.add_command(label="Выход", command=self.root.quit)
 
         # Меню "Правка"
         edit_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Правка", menu=edit_menu)
-        edit_menu.add_command(label="Копировать", command=lambda: self.copy_item(self.get_current_panel()))
-        edit_menu.add_command(label="Переместить", command=lambda: self.move_item(self.get_current_panel()))
-        edit_menu.add_command(label="Переименовать", command=lambda: self.rename_item(self.get_current_panel()))
-        edit_menu.add_command(label="Удалить", command=lambda: self.delete_item(self.get_current_panel()))
+        edit_menu.add_command(label="Добавить запись", command=self.add_record_dialog)
+        edit_menu.add_command(label="Редактировать запись", command=self.edit_record_dialog)
+        edit_menu.add_command(label="Удалить запись", command=self.delete_record)
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Сортировать", command=self.sort_dialog)
+        edit_menu.add_command(label="Поиск", command=self.search_dialog)
 
-        # Меню "Вид"
-        view_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Вид", menu=view_menu)
-        view_menu.add_command(label="Обновить", command=self.refresh_panels)
+        # Меню "Отчеты"
+        report_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Отчеты", menu=report_menu)
+        report_menu.add_command(label="Создать отчет", command=self.create_report)
+        report_menu.add_command(label="Статистика", command=self.show_statistics)
 
         # Меню "Справка"
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Справка", menu=help_menu)
+        help_menu.add_command(label="Содержание", command=self.show_help)
         help_menu.add_command(label="О программе", command=self.show_about)
 
-        # Основной фрейм для панелей
-        main_frame = ttk.Frame(self.root)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    def create_main_panel(self):
+        """Создание основной рабочей области"""
+        # Основной фрейм
+        main_frame = ttk.Frame(self.root, padding="5")
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Левая панель
-        left_frame = ttk.LabelFrame(main_frame, text="Левая панель")
-        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+        # Панель слева (список БД и информация)
+        left_frame = ttk.Frame(main_frame, width=250)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, padx=5)
 
-        self.left_path_label = ttk.Label(left_frame, text=self.left_path, relief=tk.SUNKEN)
-        self.left_path_label.pack(fill=tk.X, padx=2, pady=2)
+        ttk.Label(left_frame, text="Базы данных", font=('Arial', 12, 'bold')).pack(pady=5)
 
-        self.left_listbox = tk.Listbox(left_frame, height=25)
-        self.left_listbox.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        # Список баз данных
+        self.db_listbox = tk.Listbox(left_frame, height=10)
+        self.db_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.db_listbox.bind('<<ListboxSelect>>', self.on_db_select)
 
-        left_scrollbar = ttk.Scrollbar(left_frame, orient=tk.VERTICAL, command=self.left_listbox.yview)
-        left_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.left_listbox.config(yscrollcommand=left_scrollbar.set)
+        ttk.Button(left_frame, text="Обновить список",
+                   command=self.refresh_db_list).pack(pady=5)
 
-        # Контекстное меню для левой панели
-        self.left_listbox.bind("<Button-3>", lambda e: self.show_context_menu(e, "left"))
-        self.left_listbox.bind("<Double-Button-1>", lambda e: self.open_item("left"))
+        # Информация о текущей БД
+        self.info_frame = ttk.LabelFrame(left_frame, text="Информация", padding="5")
+        self.info_frame.pack(fill=tk.BOTH, pady=10)
 
-        # Правая панель
-        right_frame = ttk.LabelFrame(main_frame, text="Правая панель")
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=2)
+        self.info_text = tk.Text(self.info_frame, height=8, width=30, state=tk.DISABLED)
+        self.info_text.pack(fill=tk.BOTH)
 
-        self.right_path_label = ttk.Label(right_frame, text=self.right_path, relief=tk.SUNKEN)
-        self.right_path_label.pack(fill=tk.X, padx=2, pady=2)
-
-        self.right_listbox = tk.Listbox(right_frame, height=25)
-        self.right_listbox.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
-
-        right_scrollbar = ttk.Scrollbar(right_frame, orient=tk.VERTICAL, command=self.right_listbox.yview)
-        right_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.right_listbox.config(yscrollcommand=right_scrollbar.set)
-
-        # Контекстное меню для правой панели
-        self.right_listbox.bind("<Button-3>", lambda e: self.show_context_menu(e, "right"))
-        self.right_listbox.bind("<Double-Button-1>", lambda e: self.open_item("right"))
+        # Панель справа (данные)
+        right_frame = ttk.Frame(main_frame)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5)
 
         # Панель инструментов
-        toolbar = ttk.Frame(self.root)
-        toolbar.pack(fill=tk.X, padx=5, pady=2)
+        toolbar = ttk.Frame(right_frame)
+        toolbar.pack(fill=tk.X, pady=5)
 
-        ttk.Button(toolbar, text="Копировать", command=lambda: self.copy_item(self.get_current_panel())).pack(
-            side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Переместить", command=lambda: self.move_item(self.get_current_panel())).pack(
-            side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Удалить", command=lambda: self.delete_item(self.get_current_panel())).pack(
-            side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Переименовать", command=lambda: self.rename_item(self.get_current_panel())).pack(
-            side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Создать папку", command=lambda: self.create_directory(self.get_current_panel())).pack(
-            side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Создать файл", command=lambda: self.create_file(self.get_current_panel())).pack(
-            side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Поиск", command=self.search_item).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Свойства", command=lambda: self.show_properties(self.get_current_panel())).pack(
-            side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Добавить", command=self.add_record_dialog).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Изменить", command=self.edit_record_dialog).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Удалить", command=self.delete_record).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Сортировать", command=self.sort_dialog).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Поиск", command=self.search_dialog).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Обновить", command=self.refresh_table).pack(side=tk.LEFT, padx=2)
 
-        # Статусная строка
-        self.status_bar = ttk.Label(self.root, text="Готов к работе", relief=tk.SUNKEN, anchor=tk.W)
-        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        # Таблица данных
+        self.table_frame = ttk.Frame(right_frame)
+        self.table_frame.pack(fill=tk.BOTH, expand=True)
 
-    def setup_hotkeys(self):
-        """Настройка горячих клавиш"""
-        self.root.bind("<F5>", lambda e: self.copy_item(self.get_current_panel()))
-        self.root.bind("<F6>", lambda e: self.move_item(self.get_current_panel()))
-        self.root.bind("<F8>", lambda e: self.delete_item(self.get_current_panel()))
-        self.root.bind("<F2>", lambda e: self.rename_item(self.get_current_panel()))
-        self.root.bind("<F7>", lambda e: self.create_directory(self.get_current_panel()))
-        self.root.bind("<Control-f>", lambda e: self.search_item())
+        # Создаем Treeview с прокруткой
+        self.tree = ttk.Treeview(self.table_frame, show="headings")
+        scrollbar_y = ttk.Scrollbar(self.table_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        scrollbar_x = ttk.Scrollbar(self.table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
 
-    def load_left_panel(self):
-        """Загрузка содержимого левой панели"""
-        self.load_panel(self.left_listbox, self.left_path, self.left_path_label)
+        self.tree.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
 
-    def load_right_panel(self):
-        """Загрузка содержимого правой панели"""
-        self.load_panel(self.right_listbox, self.right_path, self.right_path_label)
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        scrollbar_x.pack(side=tk.BOTTOM, fill=tk.X)
+        self.tree.pack(fill=tk.BOTH, expand=True)
 
-    def load_panel(self, listbox, path, path_label):
-        """Загрузка содержимого панели"""
-        listbox.delete(0, tk.END)
+        # Поле поиска
+        search_frame = ttk.Frame(right_frame)
+        search_frame.pack(fill=tk.X, pady=5)
 
-        try:
-            # Добавляем родительский каталог
-            if path != os.path.dirname(path):
-                listbox.insert(tk.END, "..")
+        ttk.Label(search_frame, text="Поиск:").pack(side=tk.LEFT)
+        self.search_var = tk.StringVar()
+        self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
+        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-            # Получаем список файлов и папок
-            items = os.listdir(path)
+        ttk.Button(search_frame, text="Найти", command=self.perform_search).pack(side=tk.LEFT)
+        ttk.Button(search_frame, text="Сброс", command=self.refresh_table).pack(side=tk.LEFT, padx=5)
 
-            # Сортируем: сначала папки, потом файлы
-            dirs = []
-            files = []
+        self.refresh_db_list()
 
-            for item in items:
-                full_path = os.path.join(path, item)
-                if os.path.isdir(full_path):
-                    dirs.append(f"[Папка] " + item)
-                else:
-                    size = os.path.getsize(full_path)
-                    files.append(f"[Файл] {item} ({self.format_size(size)})")
+    def create_database_dialog(self):
+        """Диалог создания новой базы данных"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Создание базы данных")
+        dialog.geometry("400x300")
 
-            # Добавляем в список
-            for dir in sorted(dirs):
-                listbox.insert(tk.END, dir)
-            for file in sorted(files):
-                listbox.insert(tk.END, file)
+        ttk.Label(dialog, text="Название базы данных:").pack(pady=5)
+        name_entry = ttk.Entry(dialog, width=40)
+        name_entry.pack(pady=5)
 
-            path_label.config(text=path)
-            self.update_status(f"Загружено: {len(dirs)} папок, {len(files)} файлов")
+        ttk.Label(dialog, text="Поля (через запятую):").pack(pady=5)
+        fields_entry = ttk.Entry(dialog, width=40)
+        fields_entry.pack(pady=5)
+        ttk.Label(dialog, text="Пример: id, имя, возраст, город").pack()
 
-        except PermissionError:
-            messagebox.showerror("Ошибка", "Нет прав доступа к каталогу")
-        except Exception as e:
-            messagebox.showerror("Ошибка", str(e))
+        def create():
+            name = name_entry.get().strip()
+            fields_str = fields_entry.get().strip()
 
-    def get_current_panel(self):
-        """Определение текущей активной панели"""
-        if self.root.focus_get() == self.left_listbox:
-            return "left"
-        else:
-            return "right"
+            if not name or not fields_str:
+                messagebox.showerror("Ошибка", "Заполните все поля")
+                return
 
-    def open_item(self, panel):
-        """Открытие элемента (папки или файла)"""
-        if panel == "left":
-            listbox = self.left_listbox
-            current_path = self.left_path
-        else:
-            listbox = self.right_listbox
-            current_path = self.right_path
+            fields = [f.strip() for f in fields_str.split(',')]
 
-        selection = listbox.curselection()
-        if not selection:
-            return
-
-        item_text = listbox.get(selection[0])
-
-        # Обработка перехода вверх
-        if item_text == "..":
-            new_path = os.path.dirname(current_path)
-        else:
-            # Извлекаем имя элемента
-            if item_text.startswith("[Папка] "):
-                item_name = item_text[8:]
+            if self.manager.create_database(name, fields):
+                messagebox.showinfo("Успех", f"База данных '{name}' создана")
+                dialog.destroy()
+                self.refresh_db_list()
+                self.update_info()
+                self.setup_table_columns(fields)
             else:
-                item_name = item_text.split(" [")[0][8:] if item_text.startswith("[Файл] ") else item_text
+                messagebox.showerror("Ошибка", "База данных с таким именем уже существует")
 
-            new_path = os.path.join(current_path, item_name)
+        ttk.Button(dialog, text="Создать", command=create).pack(pady=20)
 
-        # Если это папка - переходим
-        if os.path.isdir(new_path):
-            if panel == "left":
-                self.left_path = new_path
-                self.load_left_panel()
+    def add_record_dialog(self):
+        """Диалог добавления записи"""
+        db = self.manager.get_current_db()
+        if not db:
+            messagebox.showwarning("Предупреждение", "Выберите базу данных")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Добавление записи")
+        dialog.geometry("400x400")
+
+        entries = {}
+        for i, field in enumerate(db.fields):
+            ttk.Label(dialog, text=f"{field}:").pack(pady=2)
+            entry = ttk.Entry(dialog, width=40)
+            entry.pack(pady=2)
+            entries[field] = entry
+
+        def add():
+            record = [entries[field].get().strip() for field in db.fields]
+
+            # Проверка заполнения обязательных полей
+            if not all(record):
+                messagebox.showerror("Ошибка", "Заполните все поля")
+                return
+
+            db.add_record(record)
+            self.refresh_table()
+            self.update_info()
+            dialog.destroy()
+            messagebox.showinfo("Успех", "Запись добавлена")
+
+        ttk.Button(dialog, text="Добавить", command=add).pack(pady=20)
+
+    def edit_record_dialog(self):
+        """Диалог редактирования записи"""
+        db = self.manager.get_current_db()
+        if not db:
+            messagebox.showwarning("Предупреждение", "Выберите базу данных")
+            return
+
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Предупреждение", "Выберите запись для редактирования")
+            return
+
+        index = int(self.tree.item(selection[0])['values'][0]) - 1
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Редактирование записи")
+        dialog.geometry("400x400")
+
+        entries = {}
+        current_record = db.data[index]
+
+        for i, field in enumerate(db.fields):
+            ttk.Label(dialog, text=f"{field}:").pack(pady=2)
+            entry = ttk.Entry(dialog, width=40)
+            entry.insert(0, current_record[i])
+            entry.pack(pady=2)
+            entries[field] = entry
+
+        def update():
+            new_record = [entries[field].get().strip() for field in db.fields]
+
+            if not all(new_record):
+                messagebox.showerror("Ошибка", "Заполните все поля")
+                return
+
+            db.update_record(index, new_record)
+            self.refresh_table()
+            dialog.destroy()
+            messagebox.showinfo("Успех", "Запись обновлена")
+
+        ttk.Button(dialog, text="Обновить", command=update).pack(pady=20)
+
+    def delete_record(self):
+        """Удаление записи"""
+        db = self.manager.get_current_db()
+        if not db:
+            messagebox.showwarning("Предупреждение", "Выберите базу данных")
+            return
+
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Предупреждение", "Выберите запись для удаления")
+            return
+
+        if messagebox.askyesno("Подтверждение", "Удалить выбранную запись?"):
+            index = int(self.tree.item(selection[0])['values'][0]) - 1
+            db.delete_record(index)
+            self.refresh_table()
+            self.update_info()
+
+    def sort_dialog(self):
+        """Диалог сортировки"""
+        db = self.manager.get_current_db()
+        if not db or not db.data:
+            messagebox.showwarning("Предупреждение", "Нет данных для сортировки")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Сортировка")
+        dialog.geometry("300x200")
+
+        ttk.Label(dialog, text="Поле для сортировки:").pack(pady=5)
+
+        field_var = tk.StringVar()
+        field_combo = ttk.Combobox(dialog, textvariable=field_var, values=db.fields, state='readonly')
+        field_combo.pack(pady=5)
+
+        ttk.Label(dialog, text="Направление:").pack(pady=5)
+
+        order_var = tk.BooleanVar()
+        ttk.Radiobutton(dialog, text="По возрастанию", variable=order_var, value=False).pack()
+        ttk.Radiobutton(dialog, text="По убыванию", variable=order_var, value=True).pack()
+
+        def sort():
+            if not field_var.get():
+                messagebox.showerror("Ошибка", "Выберите поле")
+                return
+
+            field_index = db.fields.index(field_var.get())
+            db.sort_data(field_index, order_var.get())
+            self.refresh_table()
+            dialog.destroy()
+
+        ttk.Button(dialog, text="Сортировать", command=sort).pack(pady=20)
+
+    def search_dialog(self):
+        """Диалог поиска"""
+        db = self.manager.get_current_db()
+        if not db:
+            messagebox.showwarning("Предупреждение", "Выберите базу данных")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Поиск")
+        dialog.geometry("300x250")
+
+        ttk.Label(dialog, text="Поле для поиска:").pack(pady=5)
+
+        field_var = tk.StringVar()
+        field_combo = ttk.Combobox(dialog, textvariable=field_var, values=db.fields, state='readonly')
+        field_combo.pack(pady=5)
+
+        ttk.Label(dialog, text="Текст для поиска:").pack(pady=5)
+        search_entry = ttk.Entry(dialog, width=30)
+        search_entry.pack(pady=5)
+
+        def search():
+            if not field_var.get():
+                messagebox.showerror("Ошибка", "Выберите поле")
+                return
+
+            field_index = db.fields.index(field_var.get())
+            search_term = search_entry.get().strip()
+
+            results = db.search_data(field_index, search_term)
+            self.display_search_results(results)
+            dialog.destroy()
+
+        ttk.Button(dialog, text="Найти", command=search).pack(pady=20)
+
+    def perform_search(self):
+        """Выполнение поиска из основного окна"""
+        db = self.manager.get_current_db()
+        if not db:
+            return
+
+        search_term = self.search_var.get().strip()
+        if search_term:
+            # Поиск по всем полям
+            results = []
+            for record in db.data:
+                if any(search_term.lower() in str(value).lower() for value in record):
+                    results.append(record)
+            self.display_search_results(results)
+
+    def display_search_results(self, results):
+        """Отображение результатов поиска"""
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+
+        for i, record in enumerate(results, 1):
+            self.tree.insert('', 'end', values=[i] + record)
+
+        self.status_bar.config(text=f"Найдено записей: {len(results)}")
+
+    def import_data(self):
+        """Импорт данных из файла"""
+        db = self.manager.get_current_db()
+        if not db:
+            messagebox.showwarning("Предупреждение", "Выберите базу данных")
+            return
+
+        file_path = filedialog.askopenfilename(
+            title="Выберите файл для импорта",
+            filetypes=[
+                ("CSV файлы", "*.csv"),
+                ("JSON файлы", "*.json"),
+                ("XML файлы", "*.xml"),
+                ("Excel файлы", "*.xlsx *.xls"),
+                ("Текстовые файлы", "*.txt"),
+                ("Все файлы", "*.*")
+            ]
+        )
+
+        if not file_path:
+            return
+
+        try:
+            ext = os.path.splitext(file_path)[1].lower()
+
+            if ext == '.csv':
+                df = pd.read_csv(file_path)
+            elif ext == '.json':
+                df = pd.read_json(file_path)
+            elif ext == '.xml':
+                df = pd.read_xml(file_path)
+            elif ext in ['.xlsx', '.xls']:
+                df = pd.read_excel(file_path)
+            elif ext == '.txt':
+                df = pd.read_csv(file_path, delimiter='\t')
             else:
-                self.right_path = new_path
-                self.load_right_panel()
-        # Если это файл - открываем для просмотра/редактирования
-        else:
-            self.edit_file(new_path)
+                messagebox.showerror("Ошибка", "Неподдерживаемый формат файла")
+                return
 
-    def edit_file(self, filepath):
-        """Редактирование текстового файла"""
-        try:
-            # Создаем окно редактирования
-            edit_window = tk.Toplevel(self.root)
-            edit_window.title(f"Редактирование: {os.path.basename(filepath)}")
-            edit_window.geometry("600x400")
+            # Проверка структуры данных
+            if list(df.columns) != db.fields:
+                if messagebox.askyesno("Внимание",
+                                       "Структура полей не совпадает. Продолжить импорт?"):
+                    # Обновляем поля
+                    db.fields = list(df.columns)
+                    self.setup_table_columns(db.fields)
 
-            # Текстовое поле
-            text_area = tk.Text(edit_window, wrap=tk.WORD)
-            text_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+            # Импорт данных
+            for _, row in df.iterrows():
+                record = [str(row[field]) if field in row else "" for field in db.fields]
+                db.add_record(record)
 
-            # Загружаем содержимое файла
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    text_area.insert('1.0', content)
-            except UnicodeDecodeError:
-                with open(filepath, 'r', encoding='cp1251') as f:
-                    content = f.read()
-                    text_area.insert('1.0', content)
-
-            # Кнопки
-            button_frame = ttk.Frame(edit_window)
-            button_frame.pack(fill=tk.X, padx=5, pady=5)
-
-            def save_file():
-                try:
-                    content = text_area.get('1.0', tk.END)
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    messagebox.showinfo("Успех", "Файл сохранен")
-                    edit_window.destroy()
-                except Exception as e:
-                    messagebox.showerror("Ошибка", str(e))
-
-            ttk.Button(button_frame, text="Сохранить", command=save_file).pack(side=tk.LEFT, padx=2)
-            ttk.Button(button_frame, text="Отмена", command=edit_window.destroy).pack(side=tk.LEFT, padx=2)
+            self.refresh_table()
+            self.update_info()
+            messagebox.showinfo("Успех", f"Импортировано {len(df)} записей")
 
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось открыть файл: {str(e)}")
+            messagebox.showerror("Ошибка импорта", str(e))
 
-    def create_file(self, panel):
-        """Создание нового файла"""
-        if panel == "left":
-            current_path = self.left_path
-        else:
-            current_path = self.right_path
-
-        filename = simpledialog.askstring("Создание файла", "Введите имя файла:")
-        if filename:
-            filepath = os.path.join(current_path, filename)
-            try:
-                with open(filepath, 'w') as f:
-                    f.write("")
-                self.refresh_panels()
-                self.update_status(f"Файл {filename} создан")
-            except Exception as e:
-                messagebox.showerror("Ошибка", str(e))
-
-    def create_directory(self, panel):
-        """Создание новой папки"""
-        if panel == "left":
-            current_path = self.left_path
-        else:
-            current_path = self.right_path
-
-        dirname = simpledialog.askstring("Создание папки", "Введите имя папки:")
-        if dirname:
-            dirpath = os.path.join(current_path, dirname)
-            try:
-                os.mkdir(dirpath)
-                self.refresh_panels()
-                self.update_status(f"Папка {dirname} создана")
-            except Exception as e:
-                messagebox.showerror("Ошибка", str(e))
-
-    def copy_item(self, panel):
-        """Копирование элемента"""
-        if panel == "left":
-            source_listbox = self.left_listbox
-            source_path = self.left_path
-            dest_path = self.right_path
-        else:
-            source_listbox = self.right_listbox
-            source_path = self.right_path
-            dest_path = self.left_path
-
-        selection = source_listbox.curselection()
-        if not selection:
+    def export_data(self):
+        """Экспорт данных в файл"""
+        db = self.manager.get_current_db()
+        if not db or not db.data:
+            messagebox.showwarning("Предупреждение", "Нет данных для экспорта")
             return
 
-        item_text = source_listbox.get(selection[0])
+        file_path = filedialog.asksaveasfilename(
+            title="Сохранить файл",
+            defaultextension=".csv",
+            filetypes=[
+                ("CSV файлы", "*.csv"),
+                ("JSON файлы", "*.json"),
+                ("XML файлы", "*.xml"),
+                ("Excel файлы", "*.xlsx"),
+                ("Текстовые файлы", "*.txt"),
+                ("Все файлы", "*.*")
+            ]
+        )
 
-        # Извлекаем имя элемента
-        if item_text == "..":
+        if not file_path:
             return
-
-        if item_text.startswith("[Папка] "):
-            item_name = item_text[8:]
-        else:
-            item_name = item_text.split(" [")[0][8:] if item_text.startswith("[Файл] ") else item_text
-
-        source_item = os.path.join(source_path, item_name)
-        dest_item = os.path.join(dest_path, item_name)
 
         try:
-            if os.path.isdir(source_item):
-                shutil.copytree(source_item, dest_item)
-                self.update_status(f"Папка {item_name} скопирована")
+            # Создаем DataFrame
+            df = pd.DataFrame(db.data, columns=db.fields)
+
+            ext = os.path.splitext(file_path)[1].lower()
+
+            if ext == '.csv':
+                df.to_csv(file_path, index=False)
+            elif ext == '.json':
+                df.to_json(file_path, orient='records', indent=2)
+            elif ext == '.xml':
+                df.to_xml(file_path, index=False)
+            elif ext in ['.xlsx']:
+                df.to_excel(file_path, index=False)
+            elif ext == '.txt':
+                df.to_csv(file_path, sep='\t', index=False)
             else:
-                shutil.copy2(source_item, dest_item)
-                self.update_status(f"Файл {item_name} скопирован")
+                messagebox.showerror("Ошибка", "Неподдерживаемый формат файла")
+                return
 
-            self.refresh_panels()
+            messagebox.showinfo("Успех", f"Данные экспортированы в {file_path}")
+
         except Exception as e:
-            messagebox.showerror("Ошибка", str(e))
+            messagebox.showerror("Ошибка экспорта", str(e))
 
-    def move_item(self, panel):
-        """Перемещение элемента"""
-        if panel == "left":
-            source_listbox = self.left_listbox
-            source_path = self.left_path
-            dest_path = self.right_path
-        else:
-            source_listbox = self.right_listbox
-            source_path = self.right_path
-            dest_path = self.left_path
-
-        selection = source_listbox.curselection()
-        if not selection:
+    def save_database(self):
+        """Сохранение базы данных"""
+        db = self.manager.get_current_db()
+        if not db:
+            messagebox.showwarning("Предупреждение", "Нет активной базы данных")
             return
 
-        item_text = source_listbox.get(selection[0])
+        file_path = filedialog.asksaveasfilename(
+            title="Сохранить базу данных",
+            defaultextension=".json",
+            filetypes=[("JSON файлы", "*.json"), ("Все файлы", "*.*")]
+        )
 
-        if item_text == "..":
+        if not file_path:
             return
-
-        if item_text.startswith("[Папка] "):
-            item_name = item_text[8:]
-        else:
-            item_name = item_text.split(" [")[0][8:] if item_text.startswith("[Файл] ") else item_text
-
-        source_item = os.path.join(source_path, item_name)
-        dest_item = os.path.join(dest_path, item_name)
 
         try:
-            shutil.move(source_item, dest_item)
-            self.update_status(f"Элемент {item_name} перемещен")
-            self.refresh_panels()
+            data_to_save = {
+                'name': db.name,
+                'fields': db.fields,
+                'data': db.data,
+                'created_date': db.created_date
+            }
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+
+            messagebox.showinfo("Успех", "База данных сохранена")
+
         except Exception as e:
-            messagebox.showerror("Ошибка", str(e))
+            messagebox.showerror("Ошибка сохранения", str(e))
 
-    def rename_item(self, panel):
-        """Переименование элемента"""
-        if panel == "left":
-            listbox = self.left_listbox
-            current_path = self.left_path
-        else:
-            listbox = self.right_listbox
-            current_path = self.right_path
+    def open_database(self):
+        """Открытие базы данных из файла"""
+        file_path = filedialog.askopenfilename(
+            title="Открыть базу данных",
+            filetypes=[("JSON файлы", "*.json"), ("Все файлы", "*.*")]
+        )
 
-        selection = listbox.curselection()
-        if not selection:
+        if not file_path:
             return
 
-        item_text = listbox.get(selection[0])
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
 
-        if item_text == "..":
+            db = Database(data['name'])
+            db.fields = data['fields']
+            db.data = data['data']
+            db.created_date = data.get('created_date', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+            self.manager.databases[db.name] = db
+            self.manager.current_db = db.name
+
+            self.refresh_db_list()
+            self.setup_table_columns(db.fields)
+            self.refresh_table()
+            self.update_info()
+
+            messagebox.showinfo("Успех", f"База данных '{db.name}' загружена")
+
+        except Exception as e:
+            messagebox.showerror("Ошибка загрузки", str(e))
+
+    def create_report(self):
+        """Создание отчета"""
+        db = self.manager.get_current_db()
+        if not db or not db.data:
+            messagebox.showwarning("Предупреждение", "Нет данных для отчета")
             return
 
-        if item_text.startswith("[Папка] "):
-            item_name = item_text[8:]
-            item_type = "папку"
-        else:
-            item_name = item_text.split(" [")[0][8:] if item_text.startswith("[Файл] ") else item_text
-            item_type = "файл"
+        report_window = tk.Toplevel(self.root)
+        report_window.title("Отчет по базе данных")
+        report_window.geometry("600x400")
 
-        new_name = simpledialog.askstring("Переименование", f"Введите новое имя для {item_type}:",
-                                          initialvalue=item_name)
+        # Создаем текстовый виджет для отчета
+        report_text = tk.Text(report_window, wrap=tk.WORD, font=('Courier', 10))
+        scrollbar = ttk.Scrollbar(report_window, command=report_text.yview)
+        report_text.configure(yscrollcommand=scrollbar.set)
 
-        if new_name and new_name != item_name:
-            old_path = os.path.join(current_path, item_name)
-            new_path = os.path.join(current_path, new_name)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        report_text.pack(fill=tk.BOTH, expand=True)
 
+        # Формируем отчет
+        report = []
+        report.append("=" * 80)
+        report.append(f"ОТЧЕТ ПО БАЗЕ ДАННЫХ: {db.name.upper()}")
+        report.append("=" * 80)
+        report.append(f"Дата создания: {db.created_date}")
+        report.append(f"Дата отчета: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report.append(f"Количество записей: {len(db.data)}")
+        report.append(f"Количество полей: {len(db.fields)}")
+        report.append("=" * 80)
+        report.append("СТРУКТУРА ПОЛЕЙ:")
+        for i, field in enumerate(db.fields, 1):
+            report.append(f"  {i}. {field}")
+        report.append("=" * 80)
+        report.append("ДАННЫЕ:")
+        report.append("-" * 80)
+
+        # Заголовки
+        header = "№   " + " | ".join([f"{f:<15}" for f in db.fields])
+        report.append(header)
+        report.append("-" * len(header))
+
+        # Данные
+        for i, record in enumerate(db.data, 1):
+            line = f"{i:<3} " + " | ".join([f"{str(val):<15}" for val in record])
+            report.append(line)
+
+        report.append("=" * 80)
+        report.append("СТАТИСТИКА:")
+        report.append(f"  Всего записей: {len(db.data)}")
+
+        # Статистика по полям (для числовых полей)
+        for field in db.fields:
             try:
-                os.rename(old_path, new_path)
-                self.update_status(f"Элемент переименован в {new_name}")
-                self.refresh_panels()
-            except Exception as e:
-                messagebox.showerror("Ошибка", str(e))
+                values = []
+                for record in db.data:
+                    field_index = db.fields.index(field)
+                    val = record[field_index]
+                    if val.replace('.', '').replace('-', '').isdigit():
+                        values.append(float(val))
 
-    def delete_item(self, panel):
-        """Удаление элемента"""
-        if panel == "left":
-            listbox = self.left_listbox
-            current_path = self.left_path
-        else:
-            listbox = self.right_listbox
-            current_path = self.right_path
+                if values:
+                    report.append(f"\n  Поле '{field}':")
+                    report.append(f"    Минимум: {min(values)}")
+                    report.append(f"    Максимум: {max(values)}")
+                    report.append(f"    Среднее: {sum(values) / len(values):.2f}")
+            except:
+                pass
 
-        selection = listbox.curselection()
-        if not selection:
+        report.append("=" * 80)
+
+        # Вставляем отчет в текстовое поле
+        report_text.insert('1.0', '\n'.join(report))
+        report_text.config(state=tk.DISABLED)
+
+        # Кнопка сохранения отчета
+        def save_report():
+            file_path = filedialog.asksaveasfilename(
+                title="Сохранить отчет",
+                defaultextension=".txt",
+                filetypes=[("Текстовые файлы", "*.txt"), ("Все файлы", "*.*")]
+            )
+
+            if file_path:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(report))
+                messagebox.showinfo("Успех", "Отчет сохранен")
+
+        ttk.Button(report_window, text="Сохранить отчет", command=save_report).pack(pady=5)
+
+    def show_statistics(self):
+        """Показать статистику по базе данных"""
+        db = self.manager.get_current_db()
+        if not db:
+            messagebox.showwarning("Предупреждение", "Выберите базу данных")
             return
 
-        item_text = listbox.get(selection[0])
+        stats_window = tk.Toplevel(self.root)
+        stats_window.title("Статистика")
+        stats_window.geometry("400x300")
 
-        if item_text == "..":
-            return
+        stats_text = tk.Text(stats_window, wrap=tk.WORD)
+        stats_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        if item_text.startswith("[Папка] "):
-            item_name = item_text[8:]
-            item_type = "папку"
-        else:
-            item_name = item_text.split(" [")[0][8:] if item_text.startswith("[Файл] ") else item_text
-            item_type = "файл"
+        stats = []
+        stats.append(f"База данных: {db.name}")
+        stats.append(f"Дата создания: {db.created_date}")
+        stats.append(f"Всего записей: {len(db.data)}")
+        stats.append(f"Всего полей: {len(db.fields)}")
+        stats.append("\nПоля:")
 
-        if messagebox.askyesno("Подтверждение", f"Вы уверены, что хотите удалить {item_type} '{item_name}'?"):
-            item_path = os.path.join(current_path, item_name)
+        for field in db.fields:
+            stats.append(f"  • {field}")
 
-            try:
-                if os.path.isdir(item_path):
-                    shutil.rmtree(item_path)
-                else:
-                    os.remove(item_path)
+        stats_text.insert('1.0', '\n'.join(stats))
+        stats_text.config(state=tk.DISABLED)
 
-                self.update_status(f"Элемент {item_name} удален")
-                self.refresh_panels()
-            except Exception as e:
-                messagebox.showerror("Ошибка", str(e))
+    def show_help(self):
+        """Показать справку"""
+        help_window = tk.Toplevel(self.root)
+        help_window.title("Справка")
+        help_window.geometry("600x400")
 
-    def search_item(self):
-        """Поиск файлов и папок"""
-        search_term = simpledialog.askstring("Поиск", "Введите имя для поиска:")
-        if not search_term:
-            return
+        help_text = tk.Text(help_window, wrap=tk.WORD)
+        help_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        panel = self.get_current_panel()
-        if panel == "left":
-            search_path = self.left_path
-        else:
-            search_path = self.right_path
+        help_content = """
+        СИСТЕМА УПРАВЛЕНИЯ БАЗАМИ ДАННЫХ
+        =================================
 
-        results = []
+        ОСНОВНЫЕ ВОЗМОЖНОСТИ:
 
-        for root, dirs, files in os.walk(search_path):
-            for dir in dirs:
-                if search_term.lower() in dir.lower():
-                    results.append(os.path.join(root, dir))
+        1. СОЗДАНИЕ БАЗЫ ДАННЫХ
+           • Файл -> Создать БД
+           • Укажите название и поля через запятую
 
-            for file in files:
-                if search_term.lower() in file.lower():
-                    results.append(os.path.join(root, file))
+        2. РАБОТА С ДАННЫМИ
+           • Добавление: кнопка "Добавить"
+           • Редактирование: выбрать запись -> "Изменить"
+           • Удаление: выбрать запись -> "Удалить"
+           • Сортировка: кнопка "Сортировать"
+           • Поиск: кнопка "Поиск" или поле поиска внизу
 
-        # Показываем результаты
-        if results:
-            result_window = tk.Toplevel(self.root)
-            result_window.title("Результаты поиска")
-            result_window.geometry("500x300")
+        3. ИМПОРТ/ЭКСПОРТ
+           • Импорт: Файл -> Импорт
+           • Экспорт: Файл -> Экспорт
+           • Поддерживаемые форматы: CSV, JSON, XML, Excel, TXT
 
-            result_listbox = tk.Listbox(result_window)
-            result_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        4. ОТЧЕТЫ
+           • Отчеты -> Создать отчет
+           • Отчеты -> Статистика
 
-            for result in results[:100]:  # Ограничиваем 100 результатами
-                result_listbox.insert(tk.END, result)
+        5. ВИЗУАЛИЗАЦИЯ
+           • Данные отображаются в таблице
+           • Возможность сортировки по столбцам
 
-            def open_selected():
-                selection = result_listbox.curselection()
-                if selection:
-                    path = result_listbox.get(selection[0])
-                    if os.path.isdir(path):
-                        if panel == "left":
-                            self.left_path = path
-                            self.load_left_panel()
-                        else:
-                            self.right_path = path
-                            self.load_right_panel()
-                    else:
-                        self.edit_file(path)
-                    result_window.destroy()
+        ГОРЯЧИЕ КЛАВИШИ:
+        • Ctrl+N: создать БД
+        • Ctrl+O: открыть БД
+        • Ctrl+S: сохранить
+        • Ctrl+F: поиск
+        • F5: обновить таблицу
+        """
 
-            ttk.Button(result_window, text="Открыть", command=open_selected).pack(pady=5)
-
-            self.update_status(f"Найдено {len(results)} элементов")
-        else:
-            messagebox.showinfo("Поиск", "Ничего не найдено")
-
-    def show_properties(self, panel):
-        """Просмотр свойств элемента"""
-        if panel == "left":
-            listbox = self.left_listbox
-            current_path = self.left_path
-        else:
-            listbox = self.right_listbox
-            current_path = self.right_path
-
-        selection = listbox.curselection()
-        if not selection:
-            # Показываем свойства текущего каталога
-            item_path = current_path
-            item_name = os.path.basename(current_path) or current_path
-        else:
-            item_text = listbox.get(selection[0])
-
-            if item_text == "..":
-                item_path = os.path.dirname(current_path)
-                item_name = ".."
-            else:
-                if item_text.startswith("[Папка] "):
-                    item_name = item_text[8:]
-                else:
-                    item_name = item_text.split(" [")[0][8:] if item_text.startswith("[Файл] ") else item_text
-
-                item_path = os.path.join(current_path, item_name)
-
-        try:
-            stats = os.stat(item_path)
-
-            # Формируем информацию о свойствах
-            properties = f"Имя: {item_name}\n"
-            properties += f"Полный путь: {item_path}\n"
-            properties += f"Тип: {'Папка' if os.path.isdir(item_path) else 'Файл'}\n"
-            properties += f"Размер: {self.format_size(stats.st_size)}\n"
-            properties += f"Дата создания: {datetime.fromtimestamp(stats.st_ctime)}\n"
-            properties += f"Дата изменения: {datetime.fromtimestamp(stats.st_mtime)}\n"
-            properties += f"Дата доступа: {datetime.fromtimestamp(stats.st_atime)}\n"
-
-            # Атрибуты (для Windows)
-            if os.name == 'nt':
-                attrs = []
-                if stats.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
-                    attrs.append("Только чтение")
-                if stats.st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN:
-                    attrs.append("Скрытый")
-                if stats.st_file_attributes & stat.FILE_ATTRIBUTE_SYSTEM:
-                    attrs.append("Системный")
-
-                properties += f"Атрибуты: {', '.join(attrs) if attrs else 'Нет'}\n"
-
-            # Права доступа (для Unix)
-            if os.name != 'nt':
-                mode = stats.st_mode
-                permissions = ""
-                permissions += "r" if mode & stat.S_IRUSR else "-"
-                permissions += "w" if mode & stat.S_IWUSR else "-"
-                permissions += "x" if mode & stat.S_IXUSR else "-"
-                permissions += "r" if mode & stat.S_IRGRP else "-"
-                permissions += "w" if mode & stat.S_IWGRP else "-"
-                permissions += "x" if mode & stat.S_IXGRP else "-"
-                permissions += "r" if mode & stat.S_IROTH else "-"
-                permissions += "w" if mode & stat.S_IWOTH else "-"
-                permissions += "x" if mode & stat.S_IXOTH else "-"
-
-                properties += f"Права доступа: {permissions}\n"
-
-            messagebox.showinfo("Свойства", properties)
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", str(e))
-
-    def format_size(self, size):
-        """Форматирование размера файла"""
-        for unit in ['Б', 'КБ', 'МБ', 'ГБ']:
-            if size < 1024.0:
-                return f"{size:.1f} {unit}"
-            size /= 1024.0
-        return f"{size:.1f} ТБ"
-
-    def show_context_menu(self, event, panel):
-        """Показ контекстного меню"""
-        context_menu = tk.Menu(self.root, tearoff=0)
-        context_menu.add_command(label="Открыть", command=lambda: self.open_item(panel))
-        context_menu.add_separator()
-        context_menu.add_command(label="Копировать", command=lambda: self.copy_item(panel))
-        context_menu.add_command(label="Переместить", command=lambda: self.move_item(panel))
-        context_menu.add_command(label="Переименовать", command=lambda: self.rename_item(panel))
-        context_menu.add_command(label="Удалить", command=lambda: self.delete_item(panel))
-        context_menu.add_separator()
-        context_menu.add_command(label="Свойства", command=lambda: self.show_properties(panel))
-
-        try:
-            context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            context_menu.grab_release()
-
-    def refresh_panels(self):
-        """Обновление обеих панелей"""
-        self.load_left_panel()
-        self.load_right_panel()
-
-    def update_status(self, message):
-        """Обновление статусной строки"""
-        self.status_bar.config(text=message)
+        help_text.insert('1.0', help_content)
+        help_text.config(state=tk.DISABLED)
 
     def show_about(self):
-        """Информация о программе"""
-        about_text = """FileMaster Pro v1.0
+        """Показать информацию о программе"""
+        about_text = """
+        Система управления базами данных
+        Версия 1.0
 
-Файловый менеджер с двухпанельным интерфейсом
+        Лабораторная работа №6
+        Разработано для учебных целей
 
-Разработано в соответствии с ТЗ
-Функции:
-- Управление файлами и папками
-- Просмотр и редактирование
-- Копирование, перемещение, удаление
-- Поиск и свойства
-- Изменение атрибутов
+        Функциональность:
+        • Создание и управление БД
+        • Импорт/экспорт данных
+        • Визуализация данных
+        • Создание отчетов
+        • Поиск и сортировка
 
-Горячие клавиши:
-F5 - Копировать
-F6 - Переместить
-F7 - Создать папку
-F8 - Удалить
-F2 - Переименовать
-Ctrl+F - Поиск"""
+        © 2024
+        """
 
         messagebox.showinfo("О программе", about_text)
 
+    def setup_table_columns(self, fields):
+        """Настройка колонок таблицы"""
+        self.tree.delete(*self.tree.get_children())
+
+        columns = ['№'] + fields
+        self.tree['columns'] = columns
+
+        for col in columns:
+            self.tree.heading(col, text=col, command=lambda c=col: self.sort_by_column(c))
+            self.tree.column(col, width=100, minwidth=50)
+
+    def sort_by_column(self, col):
+        """Сортировка по колонке"""
+        db = self.manager.get_current_db()
+        if not db:
+            return
+
+        if col == '№':
+            return
+
+        field_index = db.fields.index(col)
+        db.sort_data(field_index)
+        self.refresh_table()
+
+    def refresh_table(self):
+        """Обновление таблицы"""
+        db = self.manager.get_current_db()
+        if not db:
+            return
+
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+
+        for i, record in enumerate(db.data, 1):
+            self.tree.insert('', 'end', values=[i] + record)
+
+        self.status_bar.config(text=f"Всего записей: {len(db.data)}")
+
+    def refresh_db_list(self):
+        """Обновление списка баз данных"""
+        self.db_listbox.delete(0, tk.END)
+        for db_name in self.manager.databases.keys():
+            self.db_listbox.insert(tk.END, db_name)
+
+    def on_db_select(self, event):
+        """Обработка выбора базы данных"""
+        selection = self.db_listbox.curselection()
+        if selection:
+            db_name = self.db_listbox.get(selection[0])
+            self.manager.current_db = db_name
+            db = self.manager.get_current_db()
+
+            if db:
+                self.setup_table_columns(db.fields)
+                self.refresh_table()
+                self.update_info()
+
+    def update_info(self):
+        """Обновление информации о текущей БД"""
+        db = self.manager.get_current_db()
+
+        self.info_text.config(state=tk.NORMAL)
+        self.info_text.delete('1.0', tk.END)
+
+        if db:
+            info = f"Имя: {db.name}\n"
+            info += f"Записей: {len(db.data)}\n"
+            info += f"Полей: {len(db.fields)}\n"
+            info += f"Создана: {db.created_date}\n\n"
+            info += "Поля:\n"
+            for field in db.fields:
+                info += f"• {field}\n"
+        else:
+            info = "Нет активной БД"
+
+        self.info_text.insert('1.0', info)
+        self.info_text.config(state=tk.DISABLED)
+
 
 def main():
+    """Главная функция программы"""
     root = tk.Tk()
-    app = FileManager(root)
+    app = DatabaseGUI(root)
     root.mainloop()
 
 
